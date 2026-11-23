@@ -25,3 +25,21 @@ impl TokenStore {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::TokenStore;
+
+    #[test]
+    fn keyring_round_trip() {
+        let bot_id = "discord-server-manager-smoke-test";
+        let dummy_token = "not-a-real-discord-token";
+
+        TokenStore::save(bot_id, dummy_token).expect("Failed to save test credential");
+
+        let loaded = TokenStore::load(bot_id).expect("Failed to load test credential");
+
+        assert_eq!(loaded, dummy_token);
+
+        TokenStore::delete(bot_id).expect("Failed to delete test credential");
+    }
+}

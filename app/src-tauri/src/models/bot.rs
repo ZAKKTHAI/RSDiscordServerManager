@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BotProfile {
     pub id: String,
