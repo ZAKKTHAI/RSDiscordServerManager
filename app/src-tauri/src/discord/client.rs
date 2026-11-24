@@ -1,7 +1,7 @@
 use reqwest::{header, Client, StatusCode};
 use serde::Deserialize;
 
-use crate::models::{BotProfile, ChannelProfile};
+use crate::models::{BotProfile, ChannelProfile, MemberProfile, RoleProfile};
 
 const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 
@@ -33,6 +33,26 @@ struct DiscordChannel {
     name: String,
     #[serde(rename = "type")]
     channel_type: u8,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordRole {
+    id: String,
+    name: String,
+    color: u32,
+    hoist: bool,
+    mentionable: bool,
+    position: i64,
+    permissions: String,
+    managed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordMember {
+    user: DiscordUser,
+    nick: Option<String>,
+    avatar: Option<String>,
+    roles: Vec<String>,
 }
 
 pub struct DiscordClient {
@@ -111,7 +131,7 @@ impl DiscordClient {
         let mut result: Vec<ChannelProfile> = channels
             .into_iter()
             // 0 = GuildText, 5 = GuildAnnouncement
-            .filter(|channel| channel.channel_type == 0 || channel.channel_type == 5)
+            .filter(|channel| matches!(channel.channel_type, 0 | 2 | 4 | 5 | 13 | 15 | 16))
             .filter_map(|channel| {
                 Some(ChannelProfile {
                     id: channel.id,
@@ -126,6 +146,225 @@ impl DiscordClient {
 
         Ok(result)
     }
+
+    pub async fn fetch_guild_roles(
+        &self,
+        token: &str,
+        guild_id: &str,
+    ) -> Result<Vec<RoleProfile>, DiscordAuthError> {
+        let response = self
+            .http
+            .get(format!("{DISCORD_API_BASE}/guilds/{guild_id}/roles"))
+            .header(header::AUTHORIZATION, format!("Bot {token}"))
+            .header(header::USER_AGENT, "DiscordServerManager (desktop, 0.1.0)")
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(DiscordAuthError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(DiscordAuthError::HttpStatus(response.status()));
+        }
+
+        let roles: Vec<DiscordRole> = response
+            .json()
+            .await
+            .map_err(|error| DiscordAuthError::InvalidResponse(error.to_string()))?;
+
+        let mut result: Vec<RoleProfile> = roles
+            .into_iter()
+            .map(|role| RoleProfile {
+                id: role.id,
+                guild_id: guild_id.to_string(),
+                name: role.name,
+                color: role.color,
+                hoist: role.hoist,
+                mentionable: role.mentionable,
+                position: role.position,
+                permissions: role.permissions,
+                managed: role.managed,
+            })
+            .collect();
+
+        result.sort_by(|a, b| b.position.cmp(&a.position));
+
+        Ok(result)
+    }
+
+    pub async fn fetch_guild_members(
+        &self,
+        token: &str,
+        guild_id: &str,
+    ) -> Result<Vec<MemberProfile>, DiscordAuthError> {
+        let response = self
+            .http
+            .get(format!("{DISCORD_API_BASE}/guilds/{guild_id}/members"))
+            .query(&[("limit", "1000")])
+            .header(header::AUTHORIZATION, format!("Bot {token}"))
+            .header(header::USER_AGENT, "DiscordServerManager (desktop, 0.1.0)")
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(DiscordAuthError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(DiscordAuthError::HttpStatus(response.status()));
+        }
+
+        let members: Vec<DiscordMember> = response
+            .json()
+            .await
+            .map_err(|error| DiscordAuthError::InvalidResponse(error.to_string()))?;
+
+        let mut result: Vec<MemberProfile> = members
+            .into_iter()
+            .map(|member| MemberProfile {
+                id: member.user.id,
+                username: member.user.username,
+                display_name: member.user.global_name,
+                nickname: member.nick,
+                avatar: member.avatar.or(member.user.avatar),
+                roles: member.roles,
+                bot: member.user.bot.unwrap_or(false),
+            })
+            .collect();
+
+        result.sort_by(|a, b| a.username.to_lowercase().cmp(&b.username.to_lowercase()));
+
+        Ok(result)
+    }
+
+    pub async fn add_member_role(
+        &self,
+        token: &str,
+        guild_id: &str,
+        user_id: &str,
+        role_id: &str,
+    ) -> Result<(), DiscordAuthError> {
+        let response = self
+            .http
+            .put(format!(
+                "{DISCORD_API_BASE}/guilds/{guild_id}/members/{user_id}/roles/{role_id}"
+            ))
+            .header(header::AUTHORIZATION, format!("Bot {token}"))
+            .header(header::USER_AGENT, "DiscordServerManager (desktop, 0.1.0)")
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(DiscordAuthError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(DiscordAuthError::HttpStatus(response.status()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_member_role(
+        &self,
+        token: &str,
+        guild_id: &str,
+        user_id: &str,
+        role_id: &str,
+    ) -> Result<(), DiscordAuthError> {
+        let response = self
+            .http
+            .delete(format!(
+                "{DISCORD_API_BASE}/guilds/{guild_id}/members/{user_id}/roles/{role_id}"
+            ))
+            .header(header::AUTHORIZATION, format!("Bot {token}"))
+            .header(header::USER_AGENT, "DiscordServerManager (desktop, 0.1.0)")
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(DiscordAuthError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(DiscordAuthError::HttpStatus(response.status()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn create_guild_channel(
+        &self,
+        token: &str,
+        guild_id: &str,
+        name: &str,
+        channel_type: u8,
+        parent_id: Option<&str>,
+        topic: Option<&str>,
+    ) -> Result<(), DiscordAuthError> {
+        let name = name.trim();
+
+        if name.is_empty() {
+            return Err(DiscordAuthError::InvalidResponse(
+                "Channel name cannot be empty.".to_string(),
+            ));
+        }
+
+        if !matches!(channel_type, 0 | 2 | 4) {
+            return Err(DiscordAuthError::InvalidResponse(
+                "Unsupported channel type.".to_string(),
+            ));
+        }
+
+        let response = self
+            .http
+            .post(format!("{DISCORD_API_BASE}/guilds/{guild_id}/channels"))
+            .header(header::AUTHORIZATION, format!("Bot {token}"))
+            .header(header::USER_AGENT, "DiscordServerManager (desktop, 0.1.0)")
+            .json(&serde_json::json!({
+                "name": name,
+                "type": channel_type,
+                "parent_id": parent_id,
+                "topic": topic,
+            }))
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(DiscordAuthError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(DiscordAuthError::HttpStatus(response.status()));
+        }
+
+        Ok(())
+    }
+    pub async fn delete_guild_channel(
+        &self,
+        token: &str,
+        channel_id: &str,
+    ) -> Result<(), DiscordAuthError> {
+        let response = self
+            .http
+            .delete(format!("{DISCORD_API_BASE}/channels/{channel_id}"))
+            .header(header::AUTHORIZATION, format!("Bot {token}"))
+            .header(header::USER_AGENT, "DiscordServerManager (desktop, 0.1.0)")
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(DiscordAuthError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(DiscordAuthError::HttpStatus(response.status()));
+        }
+
+        Ok(())
+    }
+
     pub async fn send_message(
         &self,
         token: &str,

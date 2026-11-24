@@ -18,7 +18,13 @@ pub fn run() {
             commands::guild::connect_bot_gateway,
             commands::guild::list_bot_guilds,
             commands::guild::list_guild_channels,
+            commands::guild::create_guild_channel,
+            commands::guild::delete_guild_channel,
             commands::guild::send_channel_message,
+            commands::guild::list_guild_roles,
+            commands::guild::list_guild_members,
+            commands::guild::add_member_role,
+            commands::guild::remove_member_role,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

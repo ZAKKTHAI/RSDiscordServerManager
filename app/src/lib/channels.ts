@@ -11,3 +11,32 @@ export async function listGuildChannels(
     guildId,
   });
 }
+
+
+export async function createGuildChannel(
+  botId: string,
+  guildId: string,
+  name: string,
+  channelType: number,
+  parentId: string | null = null,
+  topic: string | null = null,
+): Promise<void> {
+  return invoke("create_guild_channel", {
+    botId,
+    guildId,
+    name,
+    channelType,
+    parentId,
+    topic,
+  });
+}
+
+export async function deleteGuildChannel(
+  botId: string,
+  channelId: string,
+): Promise<void> {
+  return invoke("delete_guild_channel", {
+    botId,
+    channelId,
+  });
+}

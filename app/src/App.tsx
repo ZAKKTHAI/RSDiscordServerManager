@@ -1,9 +1,26 @@
 import { useCallback, useEffect, useState } from "react";
 import { authorizeBot, listBots, removeBot } from "./lib/bots";
 import { connectBotGateway, listBotGuilds } from "./lib/guilds";
-import { listGuildChannels } from "./lib/channels";
+import {
+  listGuildChannels,
+  createGuildChannel,
+  deleteGuildChannel,
+} from "./lib/channels";
+import { listGuildRoles } from "./lib/roles";
 import { sendChannelMessage } from "./lib/messages";
-import type { BotProfile, GuildProfile, ChannelProfile } from "./types";
+import {
+  listGuildMembers,
+  addMemberRole,
+  removeMemberRole,
+} from "./lib/members";
+
+import type {
+  BotProfile,
+  GuildProfile,
+  ChannelProfile,
+  RoleProfile,
+  MemberProfile,
+} from "./types";
 import "./App.css";
 
 function App() {
@@ -25,12 +42,28 @@ function App() {
 
   const [channelsByGuild, setChannelsByGuild] = useState<
     Record<string, ChannelProfile[]>
+    >({});
+
+  const [sendingKey, setSendingKey] = useState<string | null>(null);
+
+  const [rolesByGuild, setRolesByGuild] = useState<
+    Record<string, RoleProfile[]>
+    >({});
+
+  const [membersByGuild, setMembersByGuild] = useState<
+    Record<string, MemberProfile[]>
   >({});
 
   const [channelLoadingKey, setChannelLoadingKey] = useState<string | null>(
     null,
   );
-
+  const [newChannelName, setNewChannelName] = useState("");
+  const [newChannelType, setNewChannelType] = useState<number>(0);
+  const [newChannelParentId, setNewChannelParentId] = useState("");
+  const [newChannelTopic, setNewChannelTopic] = useState("");
+  const [channelCreatingKey, setChannelCreatingKey] = useState<string | null>(
+    null,
+  );
   const [selectedChannelByBot, setSelectedChannelByBot] = useState<
     Record<string, string>
   >({});
@@ -39,7 +72,18 @@ function App() {
     {},
   );
 
-  const [sendingKey, setSendingKey] = useState<string | null>(null);
+  const [roleActionKey, setRoleActionKey] = useState<string | null>(null);
+
+  const [pendingRoleChangesByGuild, setPendingRoleChangesByGuild] = useState<
+    Record<
+      string,
+      Array<{
+        userId: string;
+        roleId: string;
+        action: "add" | "remove";
+      }>
+    >
+  >({});
 
   const refreshBots = useCallback(async () => {
     try {
@@ -137,17 +181,241 @@ function App() {
     setError("");
 
     try {
-      const channels = await listGuildChannels(botId, guildId);
+      const [channels, roles, members] = await Promise.all([
+        listGuildChannels(botId, guildId),
+        listGuildRoles(botId, guildId),
+        listGuildMembers(botId, guildId),
+      ]);
 
       setChannelsByGuild((current) => ({
         ...current,
         [key]: channels,
+      }));
+
+      setRolesByGuild((current) => ({
+        ...current,
+        [key]: roles,
+      }));
+
+      setMembersByGuild((current) => ({
+        ...current,
+        [key]: members,
       }));
     } catch (err) {
       setError(String(err));
     } finally {
       setChannelLoadingKey(null);
     }
+  }
+  async function handleCreateChannel(botId: string, guildId: string) {
+    const key = `${botId}:${guildId}`;
+    const name = newChannelName.trim();
+
+    if (!name) {
+      setError("Channel name cannot be empty.");
+      return;
+    }
+
+    setChannelCreatingKey(key);
+    setError("");
+    setMessage("");
+
+    try {
+      await createGuildChannel(
+        botId,
+        guildId,
+        name,
+        newChannelType,
+        newChannelParentId || null,
+        newChannelType === 0 ? newChannelTopic.trim() || null : null,
+      );
+
+      const channels = await listGuildChannels(botId, guildId);
+
+      setChannelsByGuild((current) => ({
+        ...current,
+        [key]: channels,
+      }));
+
+      setNewChannelName("");
+      setNewChannelTopic("");
+      setNewChannelParentId("");
+
+      setMessage("Channel created successfully.");
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setChannelCreatingKey(null);
+    }
+  }
+
+  async function handleDeleteChannel(
+    botId: string,
+    guildId: string,
+    channelId: string,
+    channelName: string,
+  ) {
+    const confirmed = window.confirm(
+      `「${channelName}」を削除しますか？\nこの操作は取り消せません。`,
+    );
+
+    if (!confirmed) return;
+
+    const key = `${botId}:${guildId}`;
+    setChannelCreatingKey(key);
+    setError("");
+    setMessage("");
+
+    try {
+      await deleteGuildChannel(botId, channelId);
+
+      const channels = await listGuildChannels(botId, guildId);
+
+      setChannelsByGuild((current) => ({
+        ...current,
+        [key]: channels,
+      }));
+
+      setSelectedChannelByBot((current) => {
+        if (current[botId] !== channelId) return current;
+
+        const next = { ...current };
+        delete next[botId];
+        return next;
+      });
+
+      setMessage(`「${channelName}」を削除しました。`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setChannelCreatingKey(null);
+    }
+  }
+
+  function handleMemberRole(
+    botId: string,
+    guildId: string,
+    userId: string,
+    roleId: string,
+    action: "add" | "remove",
+  ) {
+    const key = `${botId}:${guildId}`;
+
+    setPendingRoleChangesByGuild((current) => {
+      const changes = current[key] ?? [];
+
+      // 同じメンバー・ロールの変更は最新の操作で上書き
+      const filtered = changes.filter(
+        (change) =>
+          !(change.userId === userId && change.roleId === roleId),
+      );
+
+      // 現在のDiscord上の状態と同じなら変更を登録しない
+      const member = (membersByGuild[key] ?? []).find(
+        (item) => item.id === userId,
+      );
+
+      const alreadyHasRole = member?.roles.includes(roleId) ?? false;
+
+      if (
+        (action === "add" && alreadyHasRole) ||
+        (action === "remove" && !alreadyHasRole)
+      ) {
+        return {
+          ...current,
+          [key]: filtered,
+        };
+      }
+
+      return {
+        ...current,
+        [key]: [
+          ...filtered,
+          { userId, roleId, action },
+        ],
+      };
+    });
+  }
+
+  async function handleApplyRoleChanges(botId: string, guildId: string) {
+    const key = `${botId}:${guildId}`;
+    const changes = pendingRoleChangesByGuild[key] ?? [];
+
+    if (changes.length === 0 || roleActionKey !== null) return;
+
+    setRoleActionKey(key);
+    setError("");
+    setMessage("");
+
+    const succeeded: typeof changes = [];
+    const failed: typeof changes = [];
+
+    for (const change of changes) {
+      try {
+        if (change.action === "add") {
+          await addMemberRole(
+            botId,
+            guildId,
+            change.userId,
+            change.roleId,
+          );
+        } else {
+          await removeMemberRole(
+            botId,
+            guildId,
+            change.userId,
+            change.roleId,
+          );
+        }
+
+        succeeded.push(change);
+      } catch {
+        failed.push(change);
+      }
+    }
+
+    if (succeeded.length > 0) {
+      setMembersByGuild((current) => ({
+        ...current,
+        [key]: (current[key] ?? []).map((member) => {
+          const memberChanges = succeeded.filter(
+            (change) => change.userId === member.id,
+          );
+
+          if (memberChanges.length === 0) return member;
+
+          const roles = new Set(member.roles);
+
+          for (const change of memberChanges) {
+            if (change.action === "add") {
+              roles.add(change.roleId);
+            } else {
+              roles.delete(change.roleId);
+            }
+          }
+
+          return {
+            ...member,
+            roles: [...roles],
+          };
+        }),
+      }));
+    }
+
+    setPendingRoleChangesByGuild((current) => ({
+      ...current,
+      [key]: failed,
+    }));
+
+    if (failed.length === 0) {
+      setMessage(`${succeeded.length}件の変更を反映しました。`);
+    } else {
+      setError(
+        `${succeeded.length}件成功、${failed.length}件失敗しました。失敗分は保留中です。`,
+      );
+    }
+
+    setRoleActionKey(null);
   }
 
   async function handleSendMessage(botId: string) {
@@ -408,36 +676,309 @@ function App() {
                             {selectedGuild ? ` / ${selectedGuild.name}` : ""}
                           </h3>
 
+                          <div className="channel-create-form">
+                            <h4>Create Channel</h4>
+
+                            <input
+                              type="text"
+                              placeholder="Channel name"
+                              value={newChannelName}
+                              onChange={(event) => setNewChannelName(event.target.value)}
+                            />
+
+                            <select
+                              value={newChannelType}
+                              onChange={(event) => setNewChannelType(Number(event.target.value))}
+                            >
+                              <option value={4}>Category</option>
+                              <option value={0}>Text Channel</option>
+                              <option value={2}>Voice Channel</option>
+                            </select>
+
+                            {newChannelType !== 4 && (
+                              <select
+                                value={newChannelParentId}
+                                onChange={(event) => setNewChannelParentId(event.target.value)}
+                              >
+                                <option value="">No Category</option>
+                                {(channelsByGuild[key] ?? [])
+                                  .filter((channel) => channel.channelType === 4)
+                                  .map((category) => (
+                                    <option key={category.id} value={category.id}>
+                                      {category.name}
+                                    </option>
+                                  ))}
+                              </select>
+                            )}
+
+                            {newChannelType === 0 && (
+                              <input
+                                type="text"
+                                placeholder="Channel topic (optional)"
+                                value={newChannelTopic}
+                                onChange={(event) => setNewChannelTopic(event.target.value)}
+                              />
+                            )}
+
+                            <button
+                              type="button"
+                              disabled={!newChannelName.trim() || channelCreatingKey === key}
+                              onClick={() => void handleCreateChannel(bot.id, guildId)}
+                            >
+                              {channelCreatingKey === key ? "Creating..." : "Create Channel"}
+                            </button>
+                          </div>
+
                           {channelLoadingKey === key ? (
                             <p className="field-help">Loading channels...</p>
                           ) : channelsByGuild[key]?.length ? (
                             <div className="channel-list">
                               {channelsByGuild[key].map((channel) => (
-                                <button
-                                  type="button"
-                                  className={`channel-item channel-select ${
-                                    selectedChannelByBot[bot.id] === channel.id ? "selected" : ""
-                                  }`}
-                                  key={channel.id}
-                                  onClick={() =>
-                                    setSelectedChannelByBot((current) => ({
-                                      ...current,
-                                      [bot.id]: channel.id,
-                                    }))
-                                  }
-                                >
-                                  <span className="channel-hash">#</span>
-                                  <span>{channel.name}</span>
-                                  {selectedChannelByBot[bot.id] === channel.id && (
-                                    <span className="channel-selected-mark">Selected</span>
-                                  )}
-                                </button>
+                                <div className="channel-row" key={channel.id}>
+                                  <button
+                                    type="button"
+                                    className={`channel-item channel-select ${
+                                      selectedChannelByBot[bot.id] === channel.id ? "selected" : ""
+                                    }`}
+                                    onClick={() =>
+                                      setSelectedChannelByBot((current) => ({
+                                        ...current,
+                                        [bot.id]: channel.id,
+                                      }))
+                                    }
+                                  >
+                                    <span className="channel-hash">
+                                      {channel.channelType === 4
+                                        ? "▾"
+                                        : channel.channelType === 2
+                                          ? "🔊"
+                                          : "#"}
+                                    </span>
+                                    <span>{channel.name}</span>
+
+                                    {selectedGuild?.publicUpdatesChannelId === channel.id && (
+                                      <span className="channel-special-label">
+                                        Community Updates
+                                      </span>
+                                    )}
+
+                                    {selectedGuild?.rulesChannelId === channel.id && (
+                                      <span className="channel-special-label">
+                                        Rules
+                                      </span>
+                                    )}
+
+                                    {selectedGuild?.afkChannelId === channel.id && (
+                                      <span className="channel-special-label">
+                                        AFK
+                                      </span>
+                                    )}
+
+                                    {selectedGuild?.systemChannelId === channel.id && (
+                                      <span className="channel-special-label">
+                                        System
+                                      </span>
+                                    )}
+                                    {selectedChannelByBot[bot.id] === channel.id && (
+                                      <span className="channel-selected-mark">Selected</span>
+                                    )}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="channel-delete-button"
+                                    disabled={channelCreatingKey === key}
+                                    onClick={() =>
+                                      void handleDeleteChannel(
+                                        bot.id,
+                                        guildId,
+                                        channel.id,
+                                        channel.name,
+                                      )
+                                    }
+                                    title={`Delete ${channel.name}`}
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
                               ))}
                             </div>
                           ) : (
                             <p className="field-help">
                               No text channels found.
                             </p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    {selectedGuildByBot[bot.id] && (() => {
+                      const key = `${bot.id}:${selectedGuildByBot[bot.id]}`;
+                      const roles = rolesByGuild[key] ?? [];
+
+                      return (
+                        <div className="role-panel">
+                          <h3>Roles ({roles.length})</h3>
+
+                          {channelLoadingKey === key ? (
+                            <p className="field-help">Loading roles...</p>
+                          ) : roles.length > 0 ? (
+                            <div className="role-list">
+                              {roles.map((role) => (
+                                <div className="role-item" key={role.id}>
+                                  <span
+                                    className="role-color"
+                                    style={{
+                                      backgroundColor:
+                                        role.color === 0
+                                          ? "#99aab5"
+                                          : `#${role.color.toString(16).padStart(6, "0")}`,
+                                    }}
+                                  />
+                                  <div className="role-info">
+                                    <strong>{role.name}</strong>
+                                    <small>
+                                      Position: {role.position}
+                                      {role.managed ? " / Managed" : ""}
+                                    </small>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="field-help">No roles found.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    {selectedGuildByBot[bot.id] && (() => {
+                      const key = `${bot.id}:${selectedGuildByBot[bot.id]}`;
+                      const members = membersByGuild[key] ?? [];
+                      const roles = rolesByGuild[key] ?? [];
+                      const pendingChanges = pendingRoleChangesByGuild[key] ?? [];
+
+                      return (
+                        <div className="member-panel">
+                          <div className="member-panel-header">
+                            <h3>Members ({members.length})</h3>
+
+                            <div className="member-bulk-actions">
+                              <span className="pending-count">
+                                未反映: {pendingChanges.length}件
+                              </span>
+
+                              <button
+                                type="button"
+                                className="member-apply-button"
+                                disabled={
+                                  pendingChanges.length === 0 ||
+                                  roleActionKey !== null
+                                }
+                                onClick={() =>
+                                  void handleApplyRoleChanges(
+                                    bot.id,
+                                    selectedGuildByBot[bot.id],
+                                  )
+                                }
+                              >
+                                {roleActionKey === key ? "反映中..." : "変更を一括反映"}
+                              </button>
+                            </div>
+                          </div>
+
+                          {channelLoadingKey === key ? (
+                            <p className="field-help">Loading members...</p>
+                          ) : members.length > 0 ? (
+                            <div className="member-list">
+                              {members.map((member) => (
+                                <div className="member-item" key={member.id}>
+                                  <div className="member-info">
+                                    <strong>
+                                      {member.nickname ||
+                                        member.displayName ||
+                                        member.username}
+                                    </strong>
+                                    <small>
+                                      @{member.username}
+                                      {member.bot ? " / Bot" : ""}
+                                    </small>
+
+                                    <div className="member-roles">
+                                      {member.roles.length > 0 ? (
+                                        member.roles.map((roleId) => {
+                                          const role = roles.find((item) => item.id === roleId);
+
+                                          return (
+                                            <span className="member-role-item" key={roleId}>
+                                              <span className="member-role">
+                                                {role?.name ?? roleId}
+                                              </span>
+
+                                              {role && role.id !== selectedGuildByBot[bot.id] && (
+                                                <button
+                                                  className="member-role-remove"
+                                                  type="button"
+                                                  disabled={roleActionKey !== null || role.managed}
+                                                  onClick={() =>
+                                                    void handleMemberRole(
+                                                      bot.id,
+                                                      selectedGuildByBot[bot.id],
+                                                      member.id,
+                                                      role.id,
+                                                      "remove",
+                                                    )
+                                                  }
+                                                >
+                                                  ×
+                                                </button>
+                                              )}
+                                            </span>
+                                          );
+                                        })
+                                      ) : (
+                                        <span className="field-help">No roles</span>
+                                      )}
+                                    </div>
+
+                                    <div className="member-role-add">
+                                      <select
+                                        defaultValue=""
+                                        disabled={roleActionKey !== null}
+                                        onChange={(e) => {
+                                          const roleId = e.currentTarget.value;
+                                          if (!roleId) return;
+
+                                          void handleMemberRole(
+                                            bot.id,
+                                            selectedGuildByBot[bot.id],
+                                            member.id,
+                                            roleId,
+                                            "add",
+                                          );
+
+                                          e.currentTarget.value = "";
+                                        }}
+                                      >
+                                        <option value="">Add role...</option>
+                                        {roles
+                                          .filter(
+                                            (role) =>
+                                              role.id !== selectedGuildByBot[bot.id] &&
+                                              !role.managed &&
+                                              !member.roles.includes(role.id),
+                                          )
+                                          .map((role) => (
+                                            <option key={role.id} value={role.id}>
+                                              {role.name}
+                                            </option>
+                                          ))}
+                                      </select>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="field-help">No members found.</p>
                           )}
                         </div>
                       );

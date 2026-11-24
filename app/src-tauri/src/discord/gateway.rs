@@ -1,4 +1,3 @@
-
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -43,6 +42,13 @@ impl GatewayManager {
                                 name: guild.name,
                                 icon: guild.icon.map(|icon| icon.to_string()),
                                 owner: guild.owner.unwrap_or(false),
+
+                                public_updates_channel_id: guild
+                                    .public_updates_channel_id
+                                    .map(|id| id.to_string()),
+                                rules_channel_id: guild.rules_channel_id.map(|id| id.to_string()),
+                                afk_channel_id: guild.afk_channel_id.map(|id| id.to_string()),
+                                system_channel_id: guild.system_channel_id.map(|id| id.to_string()),
                             };
 
                             if let Ok(mut cache) = guilds.lock() {
@@ -85,4 +91,3 @@ impl GatewayManager {
         Ok(result)
     }
 }
-
