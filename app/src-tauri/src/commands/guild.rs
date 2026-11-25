@@ -76,6 +76,21 @@ pub async fn delete_guild_channel(bot_id: String, channel_id: String) -> Result<
 }
 
 #[command]
+pub async fn edit_guild_channel(
+    bot_id: String,
+    channel_id: String,
+    name: String,
+) -> Result<(), String> {
+    let token =
+        TokenStore::load(&bot_id).map_err(|error| format!("Failed to load bot token: {error}"))?;
+
+    DiscordClient::new()
+        .edit_guild_channel(&token, &channel_id, &name)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[command]
 pub async fn send_channel_message(
     bot_id: String,
     channel_id: String,

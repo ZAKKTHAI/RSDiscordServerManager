@@ -40,3 +40,15 @@ export async function deleteGuildChannel(
     channelId,
   });
 }
+
+export async function editGuildChannel(
+  botId: string,
+  channelId: string,
+  name: string,
+): Promise<void> {
+  return invoke("edit_guild_channel", {
+    botId,
+    channelId,
+    name,
+  });
+}

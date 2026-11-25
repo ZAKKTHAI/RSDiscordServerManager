@@ -20,6 +20,7 @@ pub fn run() {
             commands::guild::list_guild_channels,
             commands::guild::create_guild_channel,
             commands::guild::delete_guild_channel,
+            commands::guild::edit_guild_channel,
             commands::guild::send_channel_message,
             commands::guild::list_guild_roles,
             commands::guild::list_guild_members,

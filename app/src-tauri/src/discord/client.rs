@@ -341,6 +341,43 @@ impl DiscordClient {
 
         Ok(())
     }
+
+    pub async fn edit_guild_channel(
+        &self,
+        token: &str,
+        channel_id: &str,
+        name: &str,
+    ) -> Result<(), DiscordAuthError> {
+        let name = name.trim();
+
+        if name.is_empty() {
+            return Err(DiscordAuthError::InvalidResponse(
+                "Channel name cannot be empty.".to_string(),
+            ));
+        }
+
+        let response = self
+            .http
+            .patch(format!("{DISCORD_API_BASE}/channels/{channel_id}"))
+            .header(header::AUTHORIZATION, format!("Bot {token}"))
+            .header(header::USER_AGENT, "DiscordServerManager (desktop, 0.1.0)")
+            .json(&serde_json::json!({
+                "name": name,
+            }))
+            .send()
+            .await?;
+
+        if response.status() == StatusCode::UNAUTHORIZED {
+            return Err(DiscordAuthError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(DiscordAuthError::HttpStatus(response.status()));
+        }
+
+        Ok(())
+    }
+
     pub async fn delete_guild_channel(
         &self,
         token: &str,

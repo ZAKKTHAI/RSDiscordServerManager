@@ -1,7 +1,9 @@
-use tauri::{command, AppHandle, Manager};
+use tauri::{command, AppHandle, Manager, State};
 
 use crate::{
-    discord::DiscordClient, models::BotProfile, security::token_store::TokenStore,
+    discord::{gateway::GatewayManager, DiscordClient},
+    models::BotProfile,
+    security::token_store::TokenStore,
     storage::bot_store::BotStore,
 };
 
@@ -48,13 +50,24 @@ pub fn list_bots(app: AppHandle) -> Result<Vec<BotProfile>, String> {
 }
 
 #[command]
-pub fn remove_bot_token(app: AppHandle, bot_id: String) -> Result<(), String> {
+pub fn remove_bot_token(
+    app: AppHandle,
+    bot_id: String,
+    gateway: State<'_, GatewayManager>,
+) -> Result<(), String> {
     let data_dir = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?;
 
+    // Gatewayを停止してキャッシュを破棄
+    gateway.disconnect(&bot_id)?;
+
+    // 保存プロフィールを削除
+    BotStore::remove(&data_dir, &bot_id)?;
+
+    // Keyringからトークンを削除
     TokenStore::delete(&bot_id).map_err(|error| format!("Failed to delete bot token: {error}"))?;
 
-    BotStore::remove(&data_dir, &bot_id)
+    Ok(())
 }

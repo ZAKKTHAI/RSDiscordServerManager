@@ -5,6 +5,7 @@ import {
   listGuildChannels,
   createGuildChannel,
   deleteGuildChannel,
+  editGuildChannel,
 } from "./lib/channels";
 import { listGuildRoles } from "./lib/roles";
 import { sendChannelMessage } from "./lib/messages";
@@ -285,6 +286,49 @@ function App() {
       });
 
       setMessage(`「${channelName}」を削除しました。`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setChannelCreatingKey(null);
+    }
+  }
+
+  async function handleEditChannel(
+    botId: string,
+    guildId: string,
+    channelId: string,
+    channelName: string,
+  ) {
+    const newName = window.prompt(
+      "新しいカテゴリー名を入力してください。",
+      channelName,
+    );
+
+    if (newName === null) return;
+
+    if (!newName.trim()) {
+      setError("カテゴリー名を入力してください。");
+      return;
+    }
+
+    if (newName.trim() === channelName) return;
+
+    const key = `${botId}:${guildId}`;
+    setChannelCreatingKey(key);
+    setError("");
+    setMessage("");
+
+    try {
+      await editGuildChannel(botId, channelId, newName.trim());
+
+      const channels = await listGuildChannels(botId, guildId);
+
+      setChannelsByGuild((current) => ({
+        ...current,
+        [key]: channels,
+      }));
+
+      setMessage(`カテゴリー名を「${newName.trim()}」に変更しました。`);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -677,7 +721,13 @@ function App() {
                           </h3>
 
                           <div className="channel-create-form">
-                            <h4>Create Channel</h4>
+                            <h4>
+                              {newChannelType === 4
+                                ? "Create Category"
+                                : newChannelType === 2
+                                  ? "Create Voice Channel"
+                                  : "Create Text Channel"}
+                            </h4>
 
                             <input
                               type="text"
@@ -725,7 +775,13 @@ function App() {
                               disabled={!newChannelName.trim() || channelCreatingKey === key}
                               onClick={() => void handleCreateChannel(bot.id, guildId)}
                             >
-                              {channelCreatingKey === key ? "Creating..." : "Create Channel"}
+                              {channelCreatingKey === key
+                                ? "Creating..."
+                                : newChannelType === 4
+                                  ? "Create Category"
+                                  : newChannelType === 2
+                                    ? "Create Voice Channel"
+                                    : "Create Text Channel"}
                             </button>
                           </div>
 
@@ -783,6 +839,25 @@ function App() {
                                       <span className="channel-selected-mark">Selected</span>
                                     )}
                                   </button>
+
+                                  {channel.channelType === 4 && (
+                                    <button
+                                      type="button"
+                                      className="channel-delete-button"
+                                      disabled={channelCreatingKey === key}
+                                      onClick={() =>
+                                        void handleEditChannel(
+                                          bot.id,
+                                          guildId,
+                                          channel.id,
+                                          channel.name,
+                                        )
+                                      }
+                                      title={`Edit ${channel.name}`}
+                                    >
+                                      Edit
+                                    </button>
+                                  )}
 
                                   <button
                                     type="button"
